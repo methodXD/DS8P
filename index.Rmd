@@ -1,0 +1,175 @@
+---
+title: "Machine Learning Project (DS8)"
+subtitle: "Classification through random forest prediction"
+author: "Jeremy Stalberger"
+date: "November 5, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive Summary
+
+In this project we sought to develop a predictive model for classifying the manner in which an exercise was performed based on activity measurements. The dataset used to train the model contains accelerometer data and the corresponding activity performed by 6 participants. Specifically, a barbell lift was performed by each participant in a correct manner as well as 4 incorrect manners and a variety of accelerometer readings captured from the belt, forearm, arm, and dumbell during the exercise. After processing the data, a random forest method with 10-fold cross validation was applied to develop the predictive model. This model was then applied to a test dataset to predict the classe variable of 20 different test cases.
+
+## Data Processing
+### Install and Load Libraries
+Any necessary R packages are installed and loaded.
+```{r}
+# Install Necessary Packages
+requiredPackages <- c("caret", "plyr", "randomForest", "ggplot2")
+ipak <- function(pkg)
+    {
+    new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+    if (length(new.pkg))
+        install.packages(new.pkg, dependencies = TRUE)
+    sapply(pkg, require, character.only = TRUE)
+    }
+ipak(requiredPackages)
+
+# Invoke libraries
+library(caret)
+library(plyr)
+library(randomForest)
+library(ggplot2)
+```
+
+### Download and Load Raw Data
+The raw data files are loaded from the following links:
+
+[pml-training.csv](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)
+
+[pml-testing.csv](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+
+```{r}
+# Download the source files
+fileurl1 ="https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+fileurl2 ="https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+filename1="pml-training.csv"
+filename2="pml-testing.csv"
+if(!file.exists(filename1)){download.file(fileurl1,filename1)}
+if(!file.exists(filename2)){download.file(fileurl2,filename2)}
+# Read the data files
+training <- read.csv("pml-training.csv",header=TRUE)
+testing  <- read.csv("pml-testing.csv", header=TRUE)
+```
+
+### Explore Raw Data
+It's important to explore the dataset before analysis. A brief sample of that exploration can be found below.
+```{r}
+# Examine data
+dim(training)
+summary(training$classe)
+training[1:3,1:10]
+sum(is.na(training$classe)) # Check for NA values
+```
+
+### Subset and Organize Data
+Unnecessary variables are removed, included those that contain mostly NA values.
+```{r}
+training.raw <- training                 # Retain raw dataset
+testing.raw  <- testing                  # Retain raw dataset
+training[training==""] <- NA             # Replace Empty Values "" with "NA"
+testing [testing ==""] <- NA             # Replace Empty Values "" with "NA"
+Keep <- (colSums(is.na(training)) == 0)  # Identify columns without NA values
+training <- training[, Keep]             # Eliminate columns with NA values
+testing  <- testing [, Keep]             # Eliminate columns with NA values
+training <- training[-c(1,3,4,5,6)]      # Remove unnecessary columns
+dim(training)
+training[1:2,1:4]
+```
+
+## Analysis
+### Variable Selection
+The variable we are interested in predicting in our model is the "classe" variable. The remaining accelerometer data will be used for prediction. In addition to the accelerometer data, the participant variable (user_name) and num_window variable are both worthy of consideration for our model.
+
+To evaluate the two additional variables for inclusion and better understand their influence in the dataset, a principle component analysis was performed. As shown in the appendix, the resulting scatterplots of PC1 and PC2 colored by these variables illustrate their role relative to the classe variable. It is interesting to note the distinct groupings by user_name, which confirms the idea that the accelerometer data exhibits a unique "fingerprint" for each of the participants (with some exceptions, particularly the overlap between Carlitos and Eurico). The num_window variable captures this grouping behavior as well. It does so to a higher degree of granularity since it is a subset of both user_name and classe. We can see that this higher granularity appears to capture some useful information when we compare it to the scatterplot by classe. Although training our model to this level of granularity could have downsides if our test data contained new participants with non-overlapping characteristics, we know from looking at the test data that this is not the case. As a result, we proceed forward with including num_window and choose to remove user_name from the training data.
+
+```{r}
+training <- training[-c(1)] # Remove user_name (Col 1) & Keep num_window (Col 2)
+```
+
+### Random Forest Model
+To speed up the random forest model calculation, we'll take a subset of the training data. The remaining data will go into the validation dataset. Although it's not necessary given the 10-fold cross-validation that will be used, we'll utilize the validation dataset to calculate our out of sample error.
+
+```{r}
+# Partition training data
+set.seed(1234)
+InTrain    <- createDataPartition(y=training$classe,p=0.5,list=FALSE)
+training2  <- training[InTrain,]
+validation <- training[-InTrain,]
+```
+
+Now we create our predictive model. A random forest model was chosen due to the characteristic noise in the sensor data. Let's apply a 10-fold cross validation random forest method to the training dataset. 
+
+```{r}
+# Create Random Forest Model
+set.seed(2345)
+mod.RF  <- train(classe~.,data=training2,method="rf",prox=TRUE,allowParallel=TRUE,
+                 trControl=trainControl(method="cv",number=10))
+```
+
+### Model Results
+Below we review the results, including the fitted model, out of sample error rate, and resulting prediction on the test dataset.
+```{r}
+print(mod.RF)
+print(mod.RF$finalModel)
+confusionMatrix(validation$classe,predict(mod.RF,validation))
+pred.RF <- predict(mod.RF, newdata=testing)
+print(pred.RF)
+```
+As we can see above, the accuracy of the model is impressive, with an estimated error rate of 0.39% as calculated by the validation dataset.
+
+## Conclusion
+
+The analysis above sought to fit a predictive model to the accelerometer data in order to predict the classe variable. Using a random forest model resulted in a highly accurate classe prediction of 99.61%. This result gives us high confidence in the accuracy of the 20 predicted test cases.
+
+
+\pagebreak
+
+## Appendix
+
+### Principle Component Analysis and PCA Scatterplot by Participant
+
+```{r, fig.width=8, fig.height=7.5, fig.align='center'}
+training3 <- training.raw
+training3[training3==""] <- NA
+training3 <- training3[, Keep]
+training3$num_window <- as.factor(training3$num_window)
+training3 <- training3[-c(1,3,4,5,6)]
+
+# InTrain2   <- createDataPartition(y=training3$classe,p=0.5,list=FALSE)  # Subset if necessary
+# training3  <- training3[InTrain2,]                                      # Subset if necessary
+
+preProc <- preProcess(training3,method="pca",thresh=0.8)
+trainPC <- predict(preProc,training3)
+names(trainPC)
+
+p <- ggplot(trainPC, aes(x=PC1, y=PC2, color=user_name)) + 
+    geom_point() + theme_bw() +
+    labs(title=expression("Principle Component Analysis Scatterplot by Participant"))
+    theme(legend.position="right")
+print(p)
+```
+
+### Principle Component Analysis Scatterplot by num_window
+
+```{r, fig.width=8, fig.height=7.5, fig.align='center'}
+p <- ggplot(trainPC, aes(x=PC1, y=PC2, color=num_window)) + 
+    geom_point(show.legend=F) + theme_bw() +
+    labs(title=expression("Principle Component Analysis Scatterplot by num_window"))
+    theme(legend.position="right")
+print(p)
+```
+
+### Principle Component Analysis Scatterplot by classe
+
+```{r, fig.width=8, fig.height=7.5, fig.align='center'}
+p <- ggplot(trainPC, aes(x=PC1, y=PC2, color=classe)) + 
+    geom_point() + theme_bw() +
+    labs(title=expression("Principle Component Analysis Scatterplot by classe"))
+    theme(legend.position="right")
+print(p)
+```
